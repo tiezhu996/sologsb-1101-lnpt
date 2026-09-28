@@ -14,6 +14,7 @@ import { useRepairStore } from '@/stores/repairStore'
 import { DECAY_TYPES, type Decay, type DecayType, type Severity } from '@/types/decay'
 import { SEVERITIES } from '@/types/decay'
 import { formatArea, SEVERITY_COLOR } from '@/utils/severity'
+import { buildMergePlan, type MergePlan } from '@/utils/decayMerge'
 
 const router = useRouter()
 const hallStore = useHallStore()
@@ -39,6 +40,9 @@ const {
 const batchSeverity = ref<Severity>('中度')
 const batchType = ref<DecayType>('起甲')
 const editDialogVisible = ref(false)
+const mergeDialogVisible = ref(false)
+const mergePlan = ref<MergePlan | null>(null)
+const merging = ref(false)
 const editingDecay = ref<Decay | null>(null)
 const editForm = ref<{
   type: DecayType
@@ -144,6 +148,45 @@ async function applyBatchType(): Promise<void> {
   }
   await decayStore.bulkSetType(ids, batchType.value)
   ElMessage.success(`已将 ${ids.length} 条病害的类型改为「${batchType.value}」`)
+}
+
+/** 工序接续数预览：勾选记录原有工序总数 */
+function stepsOfDecay(decayId: string) {
+  return decayStore.repairSteps.filter((step) => step.decayId === decayId)
+}
+
+/** 勾选记录是否满足合并前提：两条以上、同层位、同类型、均未修复 */
+function evaluateMerge(): { ok: boolean; plan: MergePlan | null; message?: string } {
+  const selected = selectedRows.value.map((row) => row.decay)
+  if (selected.length < 2) return { ok: false, plan: null }
+  const result = buildMergePlan(selected, (id) => stepsOfDecay(id))
+  return result.ok ? { ok: true, plan: result.plan } : { ok: false, plan: null, message: result.message }
+}
+
+function openMerge(): void {
+  const result = evaluateMerge()
+  if (!result.ok) {
+    ElMessage.warning(result.message ?? '请先勾选两条以上病害记录')
+    return
+  }
+  mergePlan.value = result.plan
+  mergeDialogVisible.value = true
+}
+
+async function confirmMerge(): Promise<void> {
+  if (!mergePlan.value) return
+  const ids = mergePlan.value.sources.map((decay) => decay.id)
+  merging.value = true
+  try {
+    const merged = await decayStore.mergeDecays(ids)
+    mergeDialogVisible.value = false
+    mergePlan.value = null
+    ElMessage.success(`已将 ${ids.length} 条病害合并为一条（${merged.type} / ${merged.severity} / ${formatArea(merged.areaCm2)}）`)
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '合并失败，请重试')
+  } finally {
+    merging.value = false
+  }
 }
 
 function openEdit(row: { decay: Decay }): void {
@@ -305,6 +348,10 @@ const severityPalette = SEVERITY_COLOR
 
       <el-button size="small" @click="bulkMarkRepaired(true)">标记已修复</el-button>
       <el-button size="small" @click="bulkMarkRepaired(false)">标记未修复</el-button>
+
+      <el-button size="small" type="warning" plain :disabled="selectedRows.length < 2" @click="openMerge">
+        合并为一条
+      </el-button>
     </div>
 
     <div class="section-card">
@@ -409,6 +456,56 @@ const severityPalette = SEVERITY_COLOR
         <el-button type="primary" :icon="Plus" @click="submitEdit">保存修改</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="mergeDialogVisible" title="合并病害记录" width="560px">
+      <template v-if="mergePlan">
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          title="确认后将合成一条新记录，原记录保留留痕但不再参与筛选与殿宇未修复统计，且不可再拆回。"
+          class="merge-alert"
+        />
+        <div class="merge-summary">
+          <p class="merge-summary__row">
+            <span>合并条数</span>
+            <strong>{{ mergePlan.sources.length }} 条</strong>
+          </p>
+          <p class="merge-summary__row">
+            <span>病害类型</span>
+            <el-tag size="small" effect="plain">{{ mergePlan.type }}</el-tag>
+          </p>
+          <p class="merge-summary__row">
+            <span>彩画层位</span>
+            <strong>{{ layerLabel(mergePlan.layerId) }}</strong>
+          </p>
+          <p class="merge-summary__row">
+            <span>面积求和</span>
+            <strong class="mono">{{ formatArea(mergePlan.areaCm2) }}</strong>
+          </p>
+          <p class="merge-summary__row">
+            <span>严重程度</span>
+            <SeverityTag :severity="mergePlan.severity" :area-cm2="mergePlan.areaCm2" size="small" />
+            <span class="muted merge-summary__note">取勾选记录中最高程度</span>
+          </p>
+          <p class="merge-summary__row merge-summary__row--column">
+            <span>成因说明（去重保留）</span>
+            <strong>{{ mergePlan.causeGuess }}</strong>
+          </p>
+          <p class="merge-summary__row">
+            <span>修复工序接续</span>
+            <strong class="mono">{{ mergePlan.steps.length }} 道</strong>
+            <span class="muted merge-summary__note">
+              {{ mergePlan.steps.length > 0 ? '按各原记录登记顺序依次接入并重排序号' : '原记录均未安排工序' }}
+            </span>
+          </p>
+        </div>
+      </template>
+      <template #footer>
+        <el-button @click="mergeDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="merging" @click="confirmMerge">确认合并</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -436,6 +533,44 @@ const severityPalette = SEVERITY_COLOR
 
 .repair-progress {
   margin-left: 6px;
+  font-size: 12px;
+}
+
+.merge-alert {
+  margin-bottom: 14px;
+}
+
+.merge-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.merge-summary__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.merge-summary__row > span:first-child {
+  width: 130px;
+  color: #6b6257;
+}
+
+.merge-summary__row--column {
+  align-items: flex-start;
+}
+
+.merge-summary__row--column > strong {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+}
+
+.merge-summary__note {
   font-size: 12px;
 }
 </style>

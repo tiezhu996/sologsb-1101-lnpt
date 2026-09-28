@@ -56,7 +56,7 @@ const storageRows = computed(() => [
   { table: 'layers（彩画层位）', key: 'id, elementId, level, patternName, pigment', count: counts.value.layers },
   {
     table: 'decays（病害）',
-    key: 'id, layerId, type, severity, repaired, repairedAt, updatedAt',
+    key: 'id, layerId, type, severity, repaired, repairedAt, mergedInto, mergedAt, updatedAt',
     count: counts.value.decays
   },
   { table: 'repairSteps（工序）', key: 'id, decayId, seq, name, state, updatedAt', count: counts.value.repairSteps }
@@ -214,7 +214,8 @@ const previewKeys: Array<{ key: keyof Pick<BackupPayload, 'halls' | 'elements' |
         </el-table-column>
       </el-table>
       <p class="muted storage-note">
-        版本 1 → 2 的迁移：decays 表补充 repairedAt 索引，修复状态字段缺失的历史数据按 updatedAt 回填。
+        版本 1 → 2 的迁移：decays 表补充 repairedAt 索引，修复状态字段缺失的历史数据按 updatedAt 回填。<br />
+        版本 2 → 3 的迁移：decays 表补充 mergedInto / mergedAt 索引，用于同层位同类病害合并后旧记录归档留痕。
       </p>
     </div>
 

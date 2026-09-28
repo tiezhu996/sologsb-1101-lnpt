@@ -162,7 +162,7 @@ const selectedStats = computed(() => {
   if (!element) return { decayCount: 0, unrepaired: 0, area: 0, severity: { 轻度: 0, 中度: 0, 重度: 0 } }
   const layers = hallStore.layersOfElement(element.id)
   const layerIds = layers.map((layer) => layer.id)
-  const decays = hallStore.decays.filter((decay) => layerIds.includes(decay.layerId))
+  const decays = hallStore.activeDecays.filter((decay) => layerIds.includes(decay.layerId))
   const severity: Record<Severity, number> = { 轻度: 0, 中度: 0, 重度: 0 }
   decays.forEach((decay) => {
     severity[decay.severity] += 1

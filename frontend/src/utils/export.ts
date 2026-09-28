@@ -33,7 +33,12 @@ export function validateBackup(input: unknown): { ok: boolean; errors: string[];
     halls: obj.halls ?? [],
     elements: obj.elements ?? [],
     layers: obj.layers ?? [],
-    decays: obj.decays ?? [],
+    decays: (obj.decays ?? []).map((decay) => ({
+      ...decay,
+      // 兼容 v3 之前的备份：缺合并归档字段时按在册记录补齐
+      mergedInto: typeof decay.mergedInto === 'string' ? decay.mergedInto : null,
+      mergedAt: typeof decay.mergedAt === 'number' ? decay.mergedAt : null
+    })),
     repairSteps: obj.repairSteps ?? []
   }
   return { ok: true, errors, payload }
@@ -144,11 +149,16 @@ export function remapIds(payload: BackupPayload): BackupPayload {
     layerIdMap.set(layer.id, id)
     return { ...layer, id, elementId: elementIdMap.get(layer.elementId) ?? layer.elementId }
   })
-  const decays = payload.decays.map((decay) => {
-    const id = createId('dec')
-    decayIdMap.set(decay.id, id)
-    return { ...decay, id, layerId: layerIdMap.get(decay.layerId) ?? decay.layerId }
+  // 先为所有病害分配新 id，再做字段改写：mergedInto 可能指向数组中靠后的记录
+  payload.decays.forEach((decay) => {
+    decayIdMap.set(decay.id, createId('dec'))
   })
+  const decays = payload.decays.map((decay) => ({
+    ...decay,
+    id: decayIdMap.get(decay.id) ?? decay.id,
+    layerId: layerIdMap.get(decay.layerId) ?? decay.layerId,
+    mergedInto: decay.mergedInto ? (decayIdMap.get(decay.mergedInto) ?? null) : null
+  }))
   const repairSteps = payload.repairSteps.map((step) => ({
     ...step,
     id: createId('step'),
@@ -234,6 +244,8 @@ export async function seedDemoData(): Promise<void> {
           causeGuess: '地仗层脱胶，受檐口渗水影响',
           repaired: false,
           repairedAt: null,
+          mergedInto: null,
+          mergedAt: null,
           createdAt: now,
           updatedAt: now
         },
@@ -246,6 +258,8 @@ export async function seedDemoData(): Promise<void> {
           causeGuess: '木构件干缩引起画面开裂',
           repaired: false,
           repairedAt: null,
+          mergedInto: null,
+          mergedAt: null,
           createdAt: now,
           updatedAt: now
         }

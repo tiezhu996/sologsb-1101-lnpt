@@ -30,10 +30,12 @@ export const useRepairStore = defineStore('repair', () => {
     const elementMap = new Map<string, Element>()
     decayStore.elements.forEach((element) => elementMap.set(element.id, element))
     const decayMap = new Map<string, Decay>()
-    decayStore.decays.forEach((decay) => decayMap.set(decay.id, decay))
+    decayStore.activeDecays.forEach((decay) => decayMap.set(decay.id, decay))
 
     const grouped = new Map<string, RepairStep[]>()
     steps.value.forEach((step) => {
+      // 被合并旧记录的工序可能尚未完成 liveQuery 刷新；旧记录不在册则不单独成组
+      if (!decayMap.has(step.decayId)) return
       const list = grouped.get(step.decayId) ?? []
       list.push(step)
       grouped.set(step.decayId, list)
@@ -82,7 +84,7 @@ export const useRepairStore = defineStore('repair', () => {
 
   /** 待安排工序的病害（尚无任何工序） */
   const pendingDecays = computed<Decay[]>(() =>
-    decayStore.decays.filter((decay) => !steps.value.some((step) => step.decayId === decay.id))
+    decayStore.activeDecays.filter((decay) => !steps.value.some((step) => step.decayId === decay.id))
   )
 
   function groupOf(decayId: string): RepairGroup | undefined {

@@ -6,6 +6,7 @@ import type { Element } from '@/types/element'
 import type { Hall, HallStat } from '@/types/hall'
 import type { PaintLayer } from '@/types/layer'
 import type { Decay } from '@/types/decay'
+import { isActiveDecay } from '@/utils/decayMerge'
 
 /**
  * 殿宇 store：维护殿宇列表、当前选中殿宇，并派生出各殿宇的病害统计。
@@ -30,6 +31,8 @@ export const useHallStore = defineStore('hall', () => {
   const elements = computed<Element[]>(() => elementsTable.rows.value)
   const layers = computed<PaintLayer[]>(() => layersTable.rows.value)
   const decays = computed<Decay[]>(() => decaysTable.rows.value)
+  /** 在册病害（未被合并归档），统计与层位挂接列表只消费它 */
+  const activeDecays = computed<Decay[]>(() => decays.value.filter(isActiveDecay))
   const loading = computed(() => hallsTable.loading.value)
 
   /** 殿宇表是否已完成首次载入：直链场景用于区分「殿宇不存在」与「尚未读取」 */
@@ -51,7 +54,7 @@ export const useHallStore = defineStore('hall', () => {
     elements.value.forEach((element) => elementToHall.set(element.id, element.hallId))
 
     const grouped: Record<string, Decay[]> = {}
-    decays.value.forEach((decay) => {
+    activeDecays.value.forEach((decay) => {
       const elementId = layerToElement.get(decay.layerId)
       const hallId = elementId ? elementToHall.get(elementId) : undefined
       if (!hallId) return
@@ -101,9 +104,9 @@ export const useHallStore = defineStore('hall', () => {
     })
   )
 
-  const totalDecay = computed(() => decays.value.length)
-  const totalUnrepaired = computed(() => decays.value.filter((decay) => !decay.repaired).length)
-  const totalArea = computed(() => decays.value.reduce((sum, decay) => sum + decay.areaCm2, 0))
+  const totalDecay = computed(() => activeDecays.value.length)
+  const totalUnrepaired = computed(() => activeDecays.value.filter((decay) => !decay.repaired).length)
+  const totalArea = computed(() => activeDecays.value.reduce((sum, decay) => sum + decay.areaCm2, 0))
 
   function setCurrentHall(id: string | null): void {
     currentHallId.value = id
@@ -221,12 +224,12 @@ export const useHallStore = defineStore('hall', () => {
   }
 
   function decaysOfLayer(layerId: string): Decay[] {
-    return decays.value.filter((decay) => decay.layerId === layerId)
+    return activeDecays.value.filter((decay) => decay.layerId === layerId)
   }
 
   function elementDecayCount(elementId: string): number {
     const layerIds = layersOfElement(elementId).map((layer) => layer.id)
-    return decays.value.filter((decay) => layerIds.includes(decay.layerId)).length
+    return activeDecays.value.filter((decay) => layerIds.includes(decay.layerId)).length
   }
 
   return {
@@ -234,6 +237,7 @@ export const useHallStore = defineStore('hall', () => {
     elements,
     layers,
     decays,
+    activeDecays,
     loading,
     hallsReady,
     currentHallId,

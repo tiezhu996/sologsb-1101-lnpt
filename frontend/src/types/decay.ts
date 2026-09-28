@@ -14,6 +14,12 @@ export interface Decay {
   /** 由修复工序完成后回写 */
   repaired: boolean
   repairedAt: number | null
+  /**
+   * 合并去向：非空表示该记录已被合并入另一条记录（档案留痕，不再在册）。
+   * 在册记录该字段为 null；被合并的旧记录保留在本地但不参与筛选与统计。
+   */
+  mergedInto: string | null
+  mergedAt: number | null
   createdAt: number
   updatedAt: number
 }

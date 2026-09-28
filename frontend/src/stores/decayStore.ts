@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
-import { db } from '@/utils/db'
+import { db, createId } from '@/utils/db'
 import { useIdbTable } from '@/hooks/useIdbTable'
 import {
   createEmptyDecayFilter,
@@ -11,7 +11,9 @@ import {
 } from '@/types/decay'
 import type { Element } from '@/types/element'
 import type { PaintLayer } from '@/types/layer'
+import type { RepairStep } from '@/types/repair'
 import { SEVERITY_WEIGHT } from '@/utils/severity'
+import { buildMergePlan, isActiveDecay, type MergePlan } from '@/utils/decayMerge'
 
 /** 病害档案台的一行：病害 + 所属层位 + 构件（含殿宇信息） */
 export interface DecayRow {
@@ -29,6 +31,9 @@ export const useDecayStore = defineStore('decay', () => {
   const decaysTable = useIdbTable<Decay>((database) => database.decays)
   const layersTable = useIdbTable<PaintLayer>((database) => database.layers, { sortByUpdatedAt: false })
   const elementsTable = useIdbTable<Element>((database) => database.elements, { sortByUpdatedAt: false })
+  const repairStepsTable = useIdbTable<RepairStep>((database) => database.repairSteps, {
+    sortByUpdatedAt: false
+  })
 
   const filter = ref<DecayFilterState>(createEmptyDecayFilter())
   const selectedIds = reactive<Set<string>>(new Set<string>())
@@ -36,6 +41,10 @@ export const useDecayStore = defineStore('decay', () => {
   const decays = computed<Decay[]>(() => decaysTable.rows.value)
   const layers = computed<PaintLayer[]>(() => layersTable.rows.value)
   const elements = computed<Element[]>(() => elementsTable.rows.value)
+  const repairSteps = computed<RepairStep[]>(() => repairStepsTable.rows.value)
+
+  /** 在册病害：未被合并归档（被合并的旧记录仅留痕，不参与任何业务派生） */
+  const activeDecays = computed<Decay[]>(() => decays.value.filter(isActiveDecay))
 
   /** 展开后的档案行，附带层位、构件与殿宇归属 */
   const rows = computed<DecayRow[]>(() => {
@@ -43,7 +52,7 @@ export const useDecayStore = defineStore('decay', () => {
     layers.value.forEach((layer) => layerMap.set(layer.id, layer))
     const elementMap = new Map<string, Element>()
     elements.value.forEach((element) => elementMap.set(element.id, element))
-    return decays.value.map((decay) => {
+    return activeDecays.value.map((decay) => {
       const layer = layerMap.get(decay.layerId) ?? null
       const element = layer ? elementMap.get(layer.elementId) ?? null : null
       return {
@@ -80,7 +89,7 @@ export const useDecayStore = defineStore('decay', () => {
 
   const severityCounts = computed<Record<Severity, number>>(() => {
     const counts: Record<Severity, number> = { 轻度: 0, 中度: 0, 重度: 0 }
-    decays.value.forEach((decay) => {
+    activeDecays.value.forEach((decay) => {
       counts[decay.severity] += 1
     })
     return counts
@@ -88,7 +97,7 @@ export const useDecayStore = defineStore('decay', () => {
 
   const typeCounts = computed<Record<string, number>>(() => {
     const counts: Record<string, number> = {}
-    decays.value.forEach((decay) => {
+    activeDecays.value.forEach((decay) => {
       counts[decay.type] = (counts[decay.type] ?? 0) + 1
     })
     return counts
@@ -98,7 +107,7 @@ export const useDecayStore = defineStore('decay', () => {
     const layerMap = new Map<string, PaintLayer>()
     layers.value.forEach((layer) => layerMap.set(layer.id, layer))
     const counts: Record<string, number> = {}
-    decays.value.forEach((decay) => {
+    activeDecays.value.forEach((decay) => {
       const pigment = layerMap.get(decay.layerId)?.pigment
       if (!pigment) return
       counts[pigment] = (counts[pigment] ?? 0) + 1
@@ -106,11 +115,13 @@ export const useDecayStore = defineStore('decay', () => {
     return counts
   })
 
-  const totalArea = computed(() => decays.value.reduce((sum, decay) => sum + decay.areaCm2, 0))
+  const totalArea = computed(() => activeDecays.value.reduce((sum, decay) => sum + decay.areaCm2, 0))
   const filteredArea = computed(() => filteredRows.value.reduce((sum, row) => sum + row.decay.areaCm2, 0))
-  const unrepairedCount = computed(() => decays.value.filter((decay) => !decay.repaired).length)
+  const unrepairedCount = computed(() => activeDecays.value.filter((decay) => !decay.repaired).length)
   const repairedPercent = computed(() =>
-    decays.value.length === 0 ? 0 : Math.round(((decays.value.length - unrepairedCount.value) / decays.value.length) * 100)
+    activeDecays.value.length === 0
+      ? 0
+      : Math.round(((activeDecays.value.length - unrepairedCount.value) / activeDecays.value.length) * 100)
   )
 
   /** 按殿宇聚合病害数量，殿宇总览卡片直接消费 */
@@ -170,8 +181,64 @@ export const useDecayStore = defineStore('decay', () => {
     selectedIds.clear()
   }
 
-  async function createDecay(payload: Omit<Decay, 'id' | 'createdAt' | 'updatedAt'>): Promise<Decay> {
-    return decaysTable.create(payload, 'dec')
+  async function createDecay(
+    payload: Omit<Decay, 'id' | 'createdAt' | 'updatedAt' | 'mergedInto' | 'mergedAt'>
+  ): Promise<Decay> {
+    return decaysTable.create({ ...payload, mergedInto: null, mergedAt: null }, 'dec')
+  }
+
+  /**
+   * 合并病害记录：
+   * 1. 生成合成新记录（面积求和、程度取最高、成因去重保留）；
+   * 2. 旧记录的修复工序按原顺序整体接到新记录并重排 seq；
+   * 3. 旧记录保留留痕，标记 mergedInto 指向新记录，不再在册。
+   * 全部在一个可回滚事务中完成。
+   */
+  async function mergeDecays(ids: string[]): Promise<Decay> {
+    const selected = ids
+      .map((id) => decays.value.find((decay) => decay.id === id))
+      .filter((decay): decay is Decay => Boolean(decay))
+    const stepsOf = (decayId: string): RepairStep[] =>
+      repairSteps.value.filter((step) => step.decayId === decayId)
+    const result = buildMergePlan(selected, stepsOf)
+    if (!result.ok) throw new Error(result.message)
+    const plan: MergePlan = result.plan
+
+    const now = Date.now()
+    const mergedId = createId('dec')
+    const earliest = Math.min(...plan.sources.map((decay) => decay.createdAt))
+    const merged: Decay = {
+      id: mergedId,
+      layerId: plan.layerId,
+      type: plan.type,
+      severity: plan.severity,
+      areaCm2: plan.areaCm2,
+      causeGuess: plan.causeGuess,
+      repaired: false,
+      repairedAt: null,
+      mergedInto: null,
+      mergedAt: null,
+      createdAt: earliest,
+      updatedAt: now
+    }
+    const sourceIds = plan.sources.map((decay) => decay.id)
+
+    await db.transaction('rw', [db.decays, db.repairSteps], async () => {
+      await db.decays.put(merged)
+      for (const { step, seq } of plan.steps) {
+        await db.repairSteps.update(step.id, { decayId: mergedId, seq, updatedAt: now })
+      }
+      await db.decays
+        .where('id')
+        .anyOf(sourceIds)
+        .modify((decay) => {
+          decay.mergedInto = mergedId
+          decay.mergedAt = now
+          decay.updatedAt = now
+        })
+    })
+    sourceIds.forEach((id) => selectedIds.delete(id))
+    return merged
   }
 
   async function updateDecay(id: string, patch: Partial<Decay>): Promise<void> {
@@ -222,6 +289,8 @@ export const useDecayStore = defineStore('decay', () => {
     filter,
     selectedIds,
     decays,
+    activeDecays,
+    repairSteps,
     layers,
     elements,
     rows,
@@ -244,6 +313,7 @@ export const useDecayStore = defineStore('decay', () => {
     createDecay,
     updateDecay,
     removeDecay,
+    mergeDecays,
     bulkSetSeverity,
     bulkSetType,
     setRepaired
