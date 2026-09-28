@@ -1,0 +1,16 @@
+# 顶层层名兜底：避免中文目录名导致 compose 项目名为空
+name: gbmuralarch
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${COMPOSE_PROJECT_NAME:-gbmuralarch}-frontend
+    image: ${COMPOSE_PROJECT_NAME:-gbmuralarch}-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-21801}:80"
+    environment:
+      - TZ=Asia/Shanghai
+    # 纯前端应用：数据只存浏览器本地，无数据库服务、不挂载命名卷
