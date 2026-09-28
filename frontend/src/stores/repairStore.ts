@@ -80,9 +80,9 @@ export const useRepairStore = defineStore('repair', () => {
     totalSteps.value === 0 ? 0 : Math.round((doneSteps.value / totalSteps.value) * 100)
   )
 
-  /** 待安排工序的病害（尚无任何工序） */
+  /** 待安排工序的病害（尚无任何工序；已合并归档的旧记录不计） */
   const pendingDecays = computed<Decay[]>(() =>
-    decayStore.decays.filter((decay) => !steps.value.some((step) => step.decayId === decay.id))
+    decayStore.activeDecays.filter((decay) => !steps.value.some((step) => step.decayId === decay.id))
   )
 
   function groupOf(decayId: string): RepairGroup | undefined {

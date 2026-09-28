@@ -148,7 +148,11 @@ export function remapIds(payload: BackupPayload): BackupPayload {
     const id = createId('dec')
     decayIdMap.set(decay.id, id)
     return { ...decay, id, layerId: layerIdMap.get(decay.layerId) ?? decay.layerId }
-  })
+  }).map((decay) => ({
+    ...decay,
+    // 合并归档关系同样指向新分配的病害 id
+    mergedInto: decay.mergedInto ? decayIdMap.get(decay.mergedInto) ?? null : null
+  }))
   const repairSteps = payload.repairSteps.map((step) => ({
     ...step,
     id: createId('step'),
@@ -234,6 +238,7 @@ export async function seedDemoData(): Promise<void> {
           causeGuess: '地仗层脱胶，受檐口渗水影响',
           repaired: false,
           repairedAt: null,
+          mergedInto: null,
           createdAt: now,
           updatedAt: now
         },
@@ -246,6 +251,7 @@ export async function seedDemoData(): Promise<void> {
           causeGuess: '木构件干缩引起画面开裂',
           repaired: false,
           repairedAt: null,
+          mergedInto: null,
           createdAt: now,
           updatedAt: now
         }

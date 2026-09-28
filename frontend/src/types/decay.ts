@@ -14,6 +14,8 @@ export interface Decay {
   /** 由修复工序完成后回写 */
   repaired: boolean
   repairedAt: number | null
+  /** 被合并到的新病害 id：非空表示该记录为合并归档的旧记录，不再参与筛选与统计 */
+  mergedInto: string | null
   createdAt: number
   updatedAt: number
 }

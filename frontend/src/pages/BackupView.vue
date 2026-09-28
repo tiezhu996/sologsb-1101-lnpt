@@ -50,16 +50,19 @@ const counts = computed(() => ({
   repairSteps: repairStore.steps.length
 }))
 
+/** 有效病害数（不含合并归档的旧记录）与归档数 */
+const activeDecayCount = computed(() => decayStore.activeDecays.length)
+const archivedDecayCount = computed(() => decayStore.decays.length - decayStore.activeDecays.length)
+
 const storageRows = computed(() => [
   { table: 'halls（殿宇）', key: 'id, name, era, structureType, roofType, updatedAt', count: counts.value.halls },
   { table: 'elements（构件）', key: 'id, hallId, position, status, updatedAt', count: counts.value.elements },
   { table: 'layers（彩画层位）', key: 'id, elementId, level, patternName, pigment', count: counts.value.layers },
   {
     table: 'decays（病害）',
-    key: 'id, layerId, type, severity, repaired, repairedAt, updatedAt',
+    key: 'id, layerId, type, severity, repaired, repairedAt, mergedInto, updatedAt',
     count: counts.value.decays
-  },
-  { table: 'repairSteps（工序）', key: 'id, decayId, seq, name, state, updatedAt', count: counts.value.repairSteps }
+  },  { table: 'repairSteps（工序）', key: 'id, decayId, seq, name, state, updatedAt', count: counts.value.repairSteps }
 ])
 
 const localStorageRows = computed(() => [
@@ -186,7 +189,7 @@ const previewKeys: Array<{ key: keyof Pick<BackupPayload, 'halls' | 'elements' |
       <StatBadge label="殿宇" :value="counts.halls" suffix="处" icon="OfficeBuilding" tone="info" />
       <StatBadge label="构件" :value="counts.elements" suffix="件" icon="Grid" tone="info" />
       <StatBadge label="彩画层位" :value="counts.layers" suffix="层" icon="Files" />
-      <StatBadge label="病害记录" :value="counts.decays" suffix="条" icon="Histogram" tone="warning" />
+      <StatBadge label="病害记录" :value="activeDecayCount" suffix="条" icon="Histogram" tone="warning" />
       <StatBadge label="工序" :value="counts.repairSteps" suffix="道" icon="Tools" tone="success" />
       <StatBadge label="病害总面积" :value="formatArea(decayStore.totalArea)" icon="PieChart" />
     </div>
@@ -207,14 +210,18 @@ const previewKeys: Array<{ key: keyof Pick<BackupPayload, 'halls' | 'elements' |
       <el-table :data="storageRows" size="small">
         <el-table-column label="表 / 模型" prop="table" width="220" />
         <el-table-column label="索引键" prop="key" min-width="320" />
-        <el-table-column label="当前记录数" width="130">
+        <el-table-column label="当前记录数" width="170">
           <template #default="{ row }">
             <span class="mono">{{ row.count }}</span>
+            <el-tag v-if="row.table.startsWith('decays') && archivedDecayCount > 0" size="small" type="info" effect="plain">
+              含归档 {{ archivedDecayCount }}
+            </el-tag>
           </template>
         </el-table-column>
       </el-table>
       <p class="muted storage-note">
-        版本 1 → 2 的迁移：decays 表补充 repairedAt 索引，修复状态字段缺失的历史数据按 updatedAt 回填。
+        版本 1 → 2 的迁移：decays 表补充 repairedAt 索引，修复状态字段缺失的历史数据按 updatedAt 回填。<br />
+        版本 2 → 3 的迁移：decays 表补充 mergedInto 索引，支持把同层位、同类型、未修复的多条病害合并；被合并的旧记录以归档形式保留（mergedInto 指向新记录），不再参与筛选与统计。
       </p>
     </div>
 

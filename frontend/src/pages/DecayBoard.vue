@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type TableInstance } from 'element-plus'
-import { Delete, Edit, Plus, Tools } from '@element-plus/icons-vue'
+import { Connection, Delete, Edit, Plus, Tools } from '@element-plus/icons-vue'
 import EmptyPanel from '@/components/common/EmptyPanel.vue'
 import FilterBar, { type FilterModel } from '@/components/common/FilterBar.vue'
 import SeverityTag from '@/components/common/SeverityTag.vue'
@@ -13,7 +13,7 @@ import { useDecayStore } from '@/stores/decayStore'
 import { useRepairStore } from '@/stores/repairStore'
 import { DECAY_TYPES, type Decay, type DecayType, type Severity } from '@/types/decay'
 import { SEVERITIES } from '@/types/decay'
-import { formatArea, SEVERITY_COLOR } from '@/utils/severity'
+import { formatArea, SEVERITY_COLOR, SEVERITY_WEIGHT } from '@/utils/severity'
 
 const router = useRouter()
 const hallStore = useHallStore()
@@ -144,6 +144,60 @@ async function applyBatchType(): Promise<void> {
   }
   await decayStore.bulkSetType(ids, batchType.value)
   ElMessage.success(`已将 ${ids.length} 条病害的类型改为「${batchType.value}」`)
+}
+
+/** 当前勾选行不能合并时的原因；为空字符串表示可以合并 */
+const mergeBlockReason = computed(() => decayStore.mergeBlockReason(Array.from(decayStore.selectedIds)))
+
+/** 合并预览：面积求和、最高严重程度、去重后的成因 */
+const mergePreview = computed(() => {
+  const list = selectedRows.value
+  const area = list.reduce((sum, row) => sum + row.decay.areaCm2, 0)
+  const severity = list.reduce<Severity>(
+    (highest, row) =>
+      SEVERITY_WEIGHT[row.decay.severity] > SEVERITY_WEIGHT[highest] ? row.decay.severity : highest,
+    '轻度'
+  )
+  const causes = Array.from(
+    new Set(
+      list
+        .map((row) => row.decay.causeGuess.trim())
+        .filter((text) => text.length > 0 && text !== '待现场复核')
+    )
+  )
+  const stepCount = list.reduce(
+    (sum, row) => sum + repairStore.steps.filter((step) => step.decayId === row.decay.id).length,
+    0
+  )
+  return { area, severity, causes, stepCount }
+})
+
+async function applyMerge(): Promise<void> {
+  const ids = Array.from(decayStore.selectedIds)
+  const reason = decayStore.mergeBlockReason(ids)
+  if (reason) {
+    ElMessage.warning(reason)
+    return
+  }
+  const layerText = selectedRows.value[0] ? layerLabel(selectedRows.value[0].decay.layerId) : ''
+  const preview = mergePreview.value
+  const causeText = preview.causes.length > 0 ? preview.causes.join('；') : '（无）'
+  const confirmed = await ElMessageBox.confirm(
+    `将把勾选的 ${ids.length} 条「${selectedRows.value[0]?.decay.type ?? ''}」病害（层位：${layerText}）合成为一条：` +
+      `面积求和为 ${formatArea(preview.area)}，严重程度取「${preview.severity}」，成因按原顺序去重保留（${causeText}）；` +
+      `原 ${preview.stepCount} 道修复工序将按原顺序接到新记录。合成后旧记录归档，不再参与筛选与殿宇未修复统计。是否继续？`,
+    '合并病害确认',
+    { type: 'warning', confirmButtonText: '确认合并', cancelButtonText: '取消' }
+  ).catch(() => false)
+  if (!confirmed) return
+  try {
+    await decayStore.mergeDecays(ids)
+    decayStore.clearSelection()
+    tableRef.value?.clearSelection()
+    ElMessage.success(`已将 ${ids.length} 条病害合成为一条，旧记录已归档`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '合并失败')
+  }
 }
 
 function openEdit(row: { decay: Decay }): void {
@@ -305,6 +359,29 @@ const severityPalette = SEVERITY_COLOR
 
       <el-button size="small" @click="bulkMarkRepaired(true)">标记已修复</el-button>
       <el-button size="small" @click="bulkMarkRepaired(false)">标记未修复</el-button>
+
+      <el-divider direction="vertical" />
+
+      <el-tooltip
+        v-if="selectedRows.length > 0 && mergeBlockReason"
+        :content="mergeBlockReason"
+        placement="top"
+      >
+        <span>
+          <el-button size="small" type="warning" plain :icon="Connection" disabled>合并为一条</el-button>
+        </span>
+      </el-tooltip>
+      <el-button
+        v-else
+        size="small"
+        type="warning"
+        plain
+        :icon="Connection"
+        @click="applyMerge"
+      >
+        合并为一条
+      </el-button>
+      <span class="batch-bar__hint">需勾选两条以上同层位、同类型且未修复的病害</span>
     </div>
 
     <div class="section-card">
@@ -428,6 +505,11 @@ const severityPalette = SEVERITY_COLOR
 
 .batch-bar__select {
   width: 140px;
+}
+
+.batch-bar__hint {
+  font-size: 12px;
+  color: #a09586;
 }
 
 .full-width {

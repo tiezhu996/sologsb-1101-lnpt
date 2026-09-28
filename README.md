@@ -69,7 +69,7 @@ npm run preview    # 本地预览构建产物（http://localhost:21801）
 | --- | --- | --- | --- |
 | `/halls` | 殿宇总览 | 新建殿宇、按年代与结构类型筛选，卡片回显病害总数与未修复数 | Hall、Element、PaintLayer、Decay |
 | `/halls/:id/elements` | 构件与层位 | 构件树 + 层位表格，新增构件与层位，挂接病害 | Element、PaintLayer、Decay |
-| `/decays` | 病害档案台 | 按类型 / 程度 / 颜料 / 殿宇 / 部位组合筛选，批量改严重程度与类型 | Decay、PaintLayer |
+| `/decays` | 病害档案台 | 按类型 / 程度 / 颜料 / 殿宇 / 部位组合筛选，批量改严重程度与类型，勾选合并同层位同类型未修复病害 | Decay、PaintLayer |
 | `/repair` | 修复工序时间线 | 拖拽调整工序先后，回填材料与责任人，完成即回写病害为已修复 | RepairStep、Decay |
 | `/backup` | 本地数据与备份 | 查看本地结构版本、JSON 导入导出、清空与样例数据 | 全部模型 |
 
@@ -84,10 +84,18 @@ npm run preview    # 本地预览构建产物（http://localhost:21801）
 | Hall 殿宇 | `src/types/hall.ts` | `id` `name` `era` `structureType`（大木/小式） `roofType`（庑殿/歇山/悬山） | 新建后进入构件录入 |
 | Element 构件 | `src/types/element.ts` | `id` `hallId` `position`（檐下/室内/梁枋/斗拱/天花） `name` `layerCount` `baseLayer` `status`（完好/观察/待修） | 按殿宇与部位二维筛选 |
 | PaintLayer 彩画层位 | `src/types/layer.ts` | `id` `elementId` `level`（由外至内） `patternName`（旋子/和玺/苏式） `pigment`（石青/石绿/朱砂/土黄） `thicknessMm` | 层位顺次叠压 |
-| Decay 病害记录 | `src/types/decay.ts` | `id` `layerId` `type`（起甲/剥落/空鼓/粉化/龟裂） `severity`（轻度/中度/重度） `areaCm2` `causeGuess` `repaired` | 同层位可叠加多条并汇总到殿宇 |
+| Decay 病害记录 | `src/types/decay.ts` | `id` `layerId` `type`（起甲/剥落/空鼓/粉化/龟裂） `severity`（轻度/中度/重度） `areaCm2` `causeGuess` `repaired` `mergedInto` | 同层位可叠加多条并汇总到殿宇；多条同层位、同类型、未修复病害可合为一条，旧记录以 `mergedInto` 归档不再参与筛选统计 |
 | RepairStep 修复工序 | `src/types/repair.ts` | `id` `decayId` `seq` `name`（除尘/回贴/灌浆/补绘/封护） `material` `operator` `state`（未开始/进行中/已完成） | 拖拽排序，完成回写病害 |
 
-数据结构版本号 `DB_VERSION` 定义在 `src/utils/db.ts`，当前为 `v2`：`decays` 表补充 `repairedAt` 索引，并为修复状态缺失的历史数据按 `updatedAt` 回填，升级逻辑写在 Dexie 的 `.upgrade()` 中。
+数据结构版本号 `DB_VERSION` 定义在 `src/utils/db.ts`，当前为 `v3`：v2 为 `decays` 表补充 `repairedAt` 索引并回填历史修复时间；v3 为 `decays` 表补充 `mergedInto` 索引以支持病害合并归档，历史数据在 Dexie 的 `.upgrade()` 中统一回填 `mergedInto = null`。
+
+### 病害合并规则
+
+病害档案台勾选 **两条以上同层位、同病害类型且均未修复** 的记录后可合并为一条：
+
+- 面积求和；严重程度取其中最高；成因说明按原顺序去重保留（忽略空文本与「待现场复核」占位语）。
+- 原修复工序按各旧记录的原顺序拼接（每条记录内按 `seq` 升序），接到新记录并从 1 重新连续编号。
+- 旧记录不删除，而是写入 `mergedInto = 新记录 id` 归档：不再出现在档案台筛选结果、殿宇未修复统计与待编排工序中；JSON 备份仍完整保留归档记录。
 
 ---
 
